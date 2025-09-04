@@ -50,6 +50,7 @@ class FTCameraController:
         index -- Index of the camera. Under Linux this uses the device
                  file "/dev/video{index}".
         """
+        self.is_open = False
         self._index: int = index
         self._proc_read: multiprocessing.Process = None
         self._proc_queue: multiprocessing.queues.Queue = None
@@ -59,6 +60,7 @@ class FTCameraController:
 
         If capturing stops capturing first.
         """
+        self.is_open = False
         FTCameraController._logger.info("FTCameraController.close: index {}".format(self._index))
         self._stop_read()
 
@@ -67,6 +69,7 @@ class FTCameraController:
         if self._proc_read is not None:
             return
 
+        self.is_open = True
         FTCameraController._logger.info("FTCameraController.open: start process")
         self._proc_queue = multiprocessing.Queue(maxsize=1)
         self._proc_read = multiprocessing.Process(target=self._read_process, args=(self._proc_queue,))
@@ -86,8 +89,8 @@ class FTCameraController:
             image = np.frombuffer(frame[6:], dtype=np.uint8).reshape(shape)
             return image
         except pqueue.Empty:
-            FTCameraController._logger.info("FTCameraController.get_image: timeout, reopen device")
-            self._reopen()
+            # FTCameraController._logger.info("FTCameraController.get_image: timeout, reopen device")
+            # self._reopen()
             return None
         except Exception:
             FTCameraController._logger.exception(

@@ -11,9 +11,7 @@ import numpy as np
 import cv2
 from enum import Enum
 from one_euro_filter import OneEuroFilter
-from utils.misc_utils import PlaySound, SND_FILENAME, SND_ASYNC
-#import importlib
-#from osc import Tab
+from utils.misc_utils import playSound, onnx_providers
 from osc_calibrate_filter import *
 from tab import CamInfo, CamInfoOrigin
 from landmark_model_loader import *
@@ -30,13 +28,10 @@ def run_once(f):
     wrapper.has_run = False
     return wrapper
 
-
 async def delayed_setting_change(setting, value):
     await asyncio.sleep(5)
     setting = value
-    PlaySound('Audio/completed.wav', SND_FILENAME | SND_ASYNC)
-
-
+    playSound(os.path.join("Audio", "completed.wav"))
 
 class LandmarkProcessor:
     def __init__(
@@ -88,21 +83,29 @@ class LandmarkProcessor:
         #self.calibrate_config = np.empty((1, 45))
         #self.min_max_array = np.empty((2, 45))
 
-
+        ort.disable_telemetry_events()
         self.opts = ort.SessionOptions()
+        self.opts.inter_op_num_threads = 1
         self.opts.intra_op_num_threads = settings.gui_inference_threads
         self.opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        if self.runtime == "ONNX" or self.runtime == "Default (ONNX)":    # ONNX 
-            if self.use_gpu: provider = 'DmlExecutionProvider' 
-            else: provider = "CPUExecutionProvider"  # Build onnxruntime to get both DML and OpenVINO
-            self.sess = ort.InferenceSession(f'{self.model}onnx/model.onnx', self.opts, providers=[provider, ], provider_options=[{'device_id': self.gpu_index}]) # Load Babble CNN until PFLD has been converted
+        self.opts.add_session_config_entry("session.intra_op.allow_spinning", "0")  # ~3% savings worth ~6ms avg latency. Not noticeable at 60fps?
+        self.opts.enable_mem_pattern = False
+        if self.runtime in ("ONNX", "Default (ONNX)"):    # ONNX
+            if self.use_gpu: 
+                provider = onnx_providers
+            else: 
+                provider = [onnx_providers[-1]]
+            self.sess = ort.InferenceSession(
+                f'{self.model}onnx/model.onnx', 
+                self.opts, 
+                providers=onnx_providers)
             self.input_name = self.sess.get_inputs()[0].name
             self.output_name = self.sess.get_outputs()[0].name
         try:
             min_cutoff = float(self.settings.gui_min_cutoff)
             beta = float(self.settings.gui_speed_coefficient)
         except:
-            print('\033[93m[WARN] OneEuroFilter values must be a legal number.\033[0m')
+            print('\033[93m[{lang._instance.get_string("log.warn")}] OneEuroFilter values must be a legal number.\033[0m')
             min_cutoff = 0.9
             beta = 0.9
         noisy_point = np.array([45])
@@ -114,9 +117,9 @@ class LandmarkProcessor:
 
     def get_frame(self):
         return self.current_image_gray_clean
-    
-    def infer_frame(self):
-        return write_image(self)
+
+    def infer_frame(self, image):
+        return write_image(self, image)
 
     def output_images_and_update(self, output_information: CamInfo):
         try:
@@ -127,12 +130,14 @@ class LandmarkProcessor:
                 axis=1,
             )
             self.image_queue_outgoing.put((image_stack, output_information))
+            if self.image_queue_outgoing.qsize() > 1:
+                self.image_queue_outgoing.get()
+
             self.previous_image = self.current_image
             self.previous_rotation = self.config.rotation_angle
         except: # If this fails it likely means that the images are not the same size for some reason.
-            print('\033[91m[ERROR] Size of frames to display are of unequal sizes.\033[0m')
+            print('\033[91m[{lang._instance.get_string("log.error")}] Size of frames to display are of unequal sizes.\033[0m')
 
-            pass
     def capture_crop_rotate_image(self):
         # Get our current frame
         
@@ -151,7 +156,7 @@ class LandmarkProcessor:
         except:
             # Failure to process frame, reuse previous frame.
             self.current_image = self.previous_image
-            print("\033[91m[ERROR] Frame capture issue detected.\033[0m")
+            print("\033[91m[{lang._instance.get_string("log.error")}] Frame capture issue detected.\033[0m')
 
         try:
             # Apply rotation to cropped area. For any rotation area outside of the bounds of the image,
@@ -198,7 +203,7 @@ class LandmarkProcessor:
         while True:
              # Check to make sure we haven't been requested to close
             if self.cancellation_event.is_set():
-                print("\033[94m[INFO] Exiting Tracking thread\033[0m")
+                print("\033[94m[{lang._instance.get_string("log.info")}] Exiting Tracking thread\033[0m')
                 return
 
 
@@ -219,7 +224,7 @@ class LandmarkProcessor:
                     self.current_image,
                     self.current_frame_number,
                     self.current_fps,
-                ) = self.capture_queue_incoming.get(block=True, timeout=0.2)
+                ) = self.capture_queue_incoming.get(block=True, timeout=0.1)
             except queue.Empty:
                 # print("No image available")
                 continue
